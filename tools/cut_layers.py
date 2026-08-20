@@ -7,7 +7,8 @@
 1. 所有切口 mask 高斯羽化 sigma=6（≈15px 过渡带），不再用 1.2~1.5 的硬边
 2. head 层在领口切线以下多保留 45px（带着一点脖子毛转），缝藏进毛里
 3. patch_neck 加大：沿 head 边界外扩 14px + 向下 22px，覆盖 ±3° 摆头扫过的扇区
-4. 腿件上端保留段 cut-110（原 cut-70），左右外扩 25px 压住 body 挖洞的羽化边
+4. 腿件只在转轴上方保留 38px 隐藏搭接，并全程锁在各自脚掌边界内；
+   旧版向上抓 110px/左右外扩会带走胸毛和邻脚，旋转后露成“分脚趾”
 5. body 挖洞洞边同样 sigma=6 羽化
 6. 所有补丁颜色改用「遮罩加权高斯模糊原图」（sigma=10 的局部渐变色），不再是单一中位色
 """
@@ -94,10 +95,11 @@ hole_tail = ndi.gaussian_filter(tail_bin.astype(np.float32), SIG)
 
 # ---- 四条腿 ----
 LEGS = {
-  'leg_FL': dict(x0=385, x1=568, cut=992, pivot=(490, 988), px=(445, 540)),   # 前近（画面左）
-  'leg_FR': dict(x0=568, x1=740, cut=985, pivot=(650, 982), px=(605, 685)),   # 前远
-  'leg_BR': dict(x0=765, x1=972, cut=958, pivot=(855, 955), px=(815, 895)),   # 后远
-  'leg_BL': dict(x0=972, x1=1190, cut=945, pivot=(1085, 942), px=(990, 1130)),  # 后近（大毛腿）
+  # x 边界按源图四只脚掌之间的空隙划分；每个脚掌只属于一条腿。
+  'leg_FL': dict(x0=380, x1=575, cut=992, pivot=(490, 988)),   # 前近（画面左）
+  'leg_FR': dict(x0=575, x1=740, cut=985, pivot=(650, 982)),   # 前远
+  'leg_BR': dict(x0=750, x1=895, cut=958, pivot=(840, 955)),   # 后远（内侧小脚）
+  'leg_BL': dict(x0=895, x1=1045, cut=945, pivot=(965, 942)),  # 后近（画面右大毛腿）
 }
 CX0, CY0, CX1, CY1 = 200, 55, 1150, 1125   # 950 x 1070
 
@@ -105,6 +107,21 @@ def rect_mask(x0, y0, x1, y1, sig):
     m = np.zeros((H, W), np.float32)
     m[max(y0, 0):min(y1, H), max(x0, 0):min(x1, W)] = 1
     return ndi.gaussian_filter(m, sig) if sig else m
+
+def tapered_leg_mask(x0, x1, cut, sig):
+    """腿根留遮缝余量，脚掌段严格独占，不能吃进相邻脚的像素。"""
+    # 转轴就在 cut 附近，body 会盖住它上方；只需要很短的隐藏搭接。
+    # 旧版向上抓 110px，会把胸毛/邻腿也收进活动层，摆动后露成鬼影。
+    top = cut - 38
+    mask = rect_mask(x0, top, x1, H, sig)
+    # Gaussian feathering also grows *outward*. Below the pivot that would
+    # quietly re-import a neighbour's toe by a few pixels, recreating the bug
+    # this tapered mask is meant to prevent. Keep feathering inside the limb,
+    # but make ownership exclusive outside x0..x1 in the visible paw section.
+    mask[:top, :] = 0
+    mask[:, :x0] = 0
+    mask[:, x1:] = 0
+    return mask
 
 def save_rgba(name, rgb, alpha):
     img = np.dstack([rgb.astype(np.uint8), (np.clip(alpha, 0, 1) * 255).astype(np.uint8)])
@@ -115,11 +132,12 @@ patch_legs_a = np.zeros((H, W), np.float32)
 
 for nm, L in LEGS.items():
     hole = rect_mask(L['x0'], L['cut'], L['x1'], 1260, SIG)
-    piece = rect_mask(L['x0'] - GROW, L['cut'] - 110, L['x1'] + GROW, 1260, SIG)
+    piece = tapered_leg_mask(L['x0'], L['x1'], L['cut'], SIG)
     save_rgba(nm, RGB, ALPHA * piece)
     body_alpha *= np.clip(1 - hole, 0, 1)
-    # 补丁：洞口上下大范围，限制在实心剪影内，颜色稍后统一用 BLUR
-    pm = rect_mask(L['x0'], L['cut'] - 55, L['x1'], L['cut'] + 85, SIG) * solid
+    # 补丁只填腿根洞口。旧版一路延伸到 cut+85，等于在活动腿后面又
+    # 留了一截静止脚掌；腿抬起时那截会露成分叉/鬼影。
+    pm = rect_mask(L['x0'], L['cut'] - 55, L['x1'], L['cut'] + 22, SIG) * solid
     patch_legs_a = np.maximum(patch_legs_a, pm)
     print(nm, 'pivot%%=(%.2f%%, %.2f%%)' % ((L['pivot'][0] - CX0) / 9.5, (L['pivot'][1] - CY0) / 10.7))
 

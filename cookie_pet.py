@@ -202,10 +202,10 @@ class CookieView(AppKit.NSView):
             return (x + w * px, y + h * py)
 
         swing = math.sin(gait_phase * math.tau) if walking else 0.0
-        # The cut-out legs include a few shared edge pixels around neighbouring
-        # paws.  Rotating a leg past neutral drags those pixels across a planted
-        # paw and makes the toes appear to fork.  Each diagonal pair now swings
-        # only while airborne and returns exactly to the source pose for contact.
+        # Each diagonal pair swings only while airborne and returns exactly to
+        # the source pose for contact.  The asset pipeline also gives every paw
+        # exclusive pixels below its pivot, so rotation cannot tear a shared
+        # edge into a second toe.
         pair_a_lift = max(0.0, swing)
         pair_b_lift = max(0.0, -swing)
         tail_swing = (-9.0 * swing) if walking else (3.2 * math.sin(gait_phase * math.tau * .42))
@@ -217,9 +217,9 @@ class CookieView(AppKit.NSView):
             # Original art faces left. Negative rotation reaches a foreleg
             # forward; positive rotation lets the diagonal hind leg push back.
             # Opposite signs make the trot readable at only ~70 px wide.
-            ("leg_BR.png", 22.0 * pair_a_lift, pivot(.690, .841)),
+            ("leg_BR.png", 22.0 * pair_a_lift, pivot(.674, .841)),
             ("leg_FR.png", -28.0 * pair_b_lift, pivot(.474, .866)),
-            ("leg_BL.png", 22.0 * pair_b_lift, pivot(.932, .829)),
+            ("leg_BL.png", 22.0 * pair_b_lift, pivot(.805, .829)),
             ("leg_FL.png", -28.0 * pair_a_lift, pivot(.305, .872)),
             ("body.png", 0, None),
             ("patch_neck.png", 0, None),
