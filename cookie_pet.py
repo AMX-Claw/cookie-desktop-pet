@@ -214,10 +214,13 @@ class CookieView(AppKit.NSView):
             ("patch_tail.png", 0, None),
             ("tail.png", tail_swing, pivot(.802, .614)),
             ("patch_legs.png", 0, None),
-            ("leg_BR.png", 18.0 * pair_a_lift, pivot(.690, .841)),
-            ("leg_FR.png", 25.0 * pair_b_lift, pivot(.474, .866)),
-            ("leg_BL.png", 18.0 * pair_b_lift, pivot(.932, .829)),
-            ("leg_FL.png", 25.0 * pair_a_lift, pivot(.305, .872)),
+            # Original art faces left. Negative rotation reaches a foreleg
+            # forward; positive rotation lets the diagonal hind leg push back.
+            # Opposite signs make the trot readable at only ~70 px wide.
+            ("leg_BR.png", 22.0 * pair_a_lift, pivot(.690, .841)),
+            ("leg_FR.png", -28.0 * pair_b_lift, pivot(.474, .866)),
+            ("leg_BL.png", 22.0 * pair_b_lift, pivot(.932, .829)),
+            ("leg_FL.png", -28.0 * pair_a_lift, pivot(.305, .872)),
             ("body.png", 0, None),
             ("patch_neck.png", 0, None),
             ("head.png", head_nod, pivot(.421, .577)),
@@ -349,7 +352,7 @@ class CookieController:
         # At this tiny display size, a fast window translation reads as sliding
         # even when the paws animate correctly.  Keep the travel distance per
         # gait cycle short enough that the planted pair visibly grips the desk.
-        self.speed = 0.95
+        self.speed = 0.45
         self.tick_count = 0
         self.dragging = False
         self.last_tick = time.time()
