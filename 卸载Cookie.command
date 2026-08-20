@@ -9,9 +9,11 @@ trash="$HOME/.Trash/CookieDesktopPet-uninstalled-$stamp"
 
 launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
 mkdir -p "$trash"
-for path in "$runtime" "$plist" "$HOME/.cookie_desktop_pet_state.json" "$HOME/.cookie_desktop_pet.lock" "$HOME/.cookie_desktop_pet.pid"; do
-  if [[ -e "$path" ]]; then
-    mv "$path" "$trash/"
+for target in "$runtime" "$plist" \
+  "$HOME/.cookie_desktop_pet_state.json" "$HOME/.cookie_desktop_pet.lock" "$HOME/.cookie_desktop_pet.pid" \
+  "$HOME/Library/Logs/CookieDesktopPet.out.log" "$HOME/Library/Logs/CookieDesktopPet.err.log"; do
+  if [[ -e "$target" ]]; then
+    mv "$target" "$trash/"
   fi
 done
 

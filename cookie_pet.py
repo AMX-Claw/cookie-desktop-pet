@@ -376,19 +376,37 @@ class CookieController:
         AppKit.NSRunLoop.currentRunLoop().addTimer_forMode_(self.timer, NSRunLoopCommonModes_value)
 
     @objc.python_method
-    def _visible_frame(self):
-        frame = self.window.frame()
-        center = NSPoint(frame.origin.x + WIN_W / 2, frame.origin.y + WIN_H / 2)
-        for screen in NSScreen.screens():
+    def _visible_frame_for_origin(self, x, y):
+        center = NSPoint(x + WIN_W / 2, y + WIN_H / 2)
+        screens = list(NSScreen.screens())
+        for screen in screens:
             if AppKit.NSPointInRect(center, screen.frame()):
                 return screen.visibleFrame()
-        return NSScreen.mainScreen().visibleFrame()
+
+        # A monitor may have been unplugged since the position was saved. Pick
+        # the screen whose full frame is nearest to the old window center.
+        def distance_sq(screen):
+            frame = screen.frame()
+            left, bottom = frame.origin.x, frame.origin.y
+            right = left + frame.size.width
+            top = bottom + frame.size.height
+            nearest_x = min(max(center.x, left), right)
+            nearest_y = min(max(center.y, bottom), top)
+            return (center.x - nearest_x) ** 2 + (center.y - nearest_y) ** 2
+
+        screen = min(screens, key=distance_sq) if screens else NSScreen.mainScreen()
+        return screen.visibleFrame()
+
+    @objc.python_method
+    def _visible_frame(self):
+        frame = self.window.frame()
+        return self._visible_frame_for_origin(frame.origin.x, frame.origin.y)
 
     @objc.python_method
     def _restore_position(self):
-        visible = NSScreen.mainScreen().visibleFrame()
-        x = visible.origin.x + (visible.size.width - WIN_W) / 2
-        y = visible.origin.y + 8
+        main_visible = NSScreen.mainScreen().visibleFrame()
+        x = main_visible.origin.x + (main_visible.size.width - WIN_W) / 2
+        y = main_visible.origin.y + 8
         try:
             data = json.loads(STATE_FILE.read_text())
             x = float(data.get("x", x))
@@ -397,6 +415,7 @@ class CookieController:
             self.draw_facing = self.facing
         except (OSError, ValueError, TypeError):
             pass
+        visible = self._visible_frame_for_origin(x, y)
         x = min(max(x, visible.origin.x), visible.origin.x + visible.size.width - WIN_W)
         y = min(max(y, visible.origin.y), visible.origin.y + visible.size.height - WIN_H)
         self.window.setFrameOrigin_(NSPoint(x, y))
