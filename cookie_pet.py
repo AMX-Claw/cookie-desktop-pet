@@ -8,7 +8,10 @@ import json
 import math
 import os
 import random
+import re
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -54,6 +57,10 @@ WIN_W = 92
 WIN_H = 100
 FPS = 24.0
 MOUSE_IDLE_SLEEP_SECONDS = float(os.environ.get("COOKIE_MOUSE_IDLE_SECONDS", "45"))
+ACTIVE_BREAK_SECONDS = float(os.environ.get("COOKIE_BREAK_SECONDS", "2700"))
+SYSTEM_POLL_SECONDS = float(os.environ.get("COOKIE_SYSTEM_POLL_SECONDS", "30"))
+MISCHIEF_MIN_SECONDS = float(os.environ.get("COOKIE_MISCHIEF_MIN_SECONDS", "180"))
+MISCHIEF_MAX_SECONDS = float(os.environ.get("COOKIE_MISCHIEF_MAX_SECONDS", "420"))
 
 
 def rgba(hex_color: str, alpha: float = 1.0):
@@ -129,6 +136,8 @@ class CookieView(AppKit.NSView):
         dy = now.y - self.drag_start.y
         if abs(dx) + abs(dy) > 3:
             self.dragged = True
+            if self.controller:
+                self.controller.dragging = True
         self.window().setFrameOrigin_(
             NSPoint(self.drag_origin.x + dx, self.drag_origin.y + dy)
         )
@@ -264,6 +273,17 @@ class CookieView(AppKit.NSView):
             )
 
     @objc.python_method
+    def _draw_mail_envelope(self, facing):
+        x = 48 if facing == -1 else 34
+        NSString.stringWithString_("✉︎").drawAtPoint_withAttributes_(
+            NSPoint(x, 64),
+            {
+                NSFontAttributeName: NSFont.boldSystemFontOfSize_(12),
+                NSForegroundColorAttributeName: rgba("#c84d43", .95),
+            },
+        )
+
+    @objc.python_method
     def _draw_bubble(self):
         if not self.message or time.time() >= self.message_until:
             return
@@ -326,6 +346,8 @@ class CookieView(AppKit.NSView):
                 walking=False,
                 head_angle=c.look_angle,
             )
+        if time.time() < c.mail_alert_until:
+            self._draw_mail_envelope(facing)
         self._draw_bubble()
 
 
@@ -382,6 +404,19 @@ class CookieController:
         self.last_mouse_point = (mouse.x, mouse.y)
         self.last_mouse_moved_at = time.time()
         self.sleep_due_to_mouse_idle = False
+        self.active_started_at = time.time()
+        self.mail_unread_seen = None
+        self.mail_alert_until = 0.0
+        self.latest_mail_unread = None
+        self.memory_pressure_level = "normal"
+        self.memory_high_samples = 0
+        self.memory_sleep_requested = False
+        self.monitor_stop = threading.Event()
+        self.mischief_target_x = None
+        self.mischief_until = 0.0
+        self.next_mischief_at = time.time() + random.uniform(
+            MISCHIEF_MIN_SECONDS, MISCHIEF_MAX_SECONDS
+        )
 
         self._restore_position()
         # NSWindow origins are effectively snapped to backing pixels. At the
@@ -392,6 +427,13 @@ class CookieController:
         self.window.makeKeyAndOrderFront_(None)
         self.view.say("妈妈，我来桌面上散步啦 🐕", 4.5)
 
+        self.monitor_thread = threading.Thread(
+            target=self._system_monitor_loop,
+            name="CookieSystemMonitor",
+            daemon=True,
+        )
+        self.monitor_thread.start()
+
         self.timer = NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
             1.0 / FPS,
             self,
@@ -401,6 +443,139 @@ class CookieController:
         )
         NSRunLoopCommonModes_value = NSRunLoopCommonModes
         AppKit.NSRunLoop.currentRunLoop().addTimer_forMode_(self.timer, NSRunLoopCommonModes_value)
+
+    @objc.python_method
+    def _system_monitor_loop(self):
+        """Low-frequency, metadata-only system sensing off the UI thread."""
+        while not self.monitor_stop.is_set():
+            try:
+                result = subprocess.run(
+                    ["/usr/bin/memory_pressure", "-Q"],
+                    capture_output=True,
+                    text=True,
+                    timeout=6,
+                    check=False,
+                )
+                match = re.search(r"free percentage:\s*(\d+)%", result.stdout)
+                if match:
+                    free = int(match.group(1))
+                    if free < 5:
+                        self.memory_pressure_level = "critical"
+                    elif free < 10:
+                        self.memory_pressure_level = "high"
+                    elif free < 20:
+                        self.memory_pressure_level = "elevated"
+                    else:
+                        self.memory_pressure_level = "normal"
+                    if self.memory_pressure_level in ("high", "critical"):
+                        self.memory_high_samples += 1
+                        if self.memory_high_samples >= 3:
+                            self.memory_sleep_requested = True
+                            self.memory_high_samples = 0
+                    else:
+                        self.memory_high_samples = 0
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+            # Asking Mail for one integer can wake a closed app, so only poll
+            # while Mail is already running. No subject, sender, or body leaves it.
+            try:
+                running = subprocess.run(
+                    ["/usr/bin/pgrep", "-x", "Mail"],
+                    capture_output=True,
+                    timeout=3,
+                    check=False,
+                ).returncode == 0
+                if running:
+                    result = subprocess.run(
+                        [
+                            "/usr/bin/osascript",
+                            "-e",
+                            'tell application "Mail" to get unread count of inbox',
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=8,
+                        check=False,
+                    )
+                    value = result.stdout.strip()
+                    if result.returncode == 0 and value.isdigit():
+                        self.latest_mail_unread = int(value)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+            self.monitor_stop.wait(SYSTEM_POLL_SECONDS)
+
+    @objc.python_method
+    def _consume_system_events(self, now):
+        unread = self.latest_mail_unread
+        if unread is not None:
+            self.latest_mail_unread = None
+            previous = self.mail_unread_seen
+            self.mail_unread_seen = unread
+            if previous is not None and unread > previous:
+                delta = unread - previous
+                self.mail_alert_until = now + 5.5
+                if not self.force_state:
+                    self.turning = False
+                    self.state = "stand"
+                    self.state_until = now + 4.5
+                self.view.say(f"有 {delta} 封新邮件 ✉︎", 4.8)
+            if previous != unread:
+                self._save_position()
+
+        if self.memory_sleep_requested:
+            self.memory_sleep_requested = False
+            if not self.force_state and self.state != "sleep":
+                self.turning = False
+                self.state = "sleep"
+                self.sleep_due_to_mouse_idle = False
+                self.state_until = now + 45
+                self.view.say("电脑也累啦，一起歇会儿", 5.0)
+
+    @objc.python_method
+    def _maybe_remind_break(self, now):
+        if (
+            not self.force_state
+            and not self.dragging
+            and now - self.last_mouse_moved_at < 60
+            and now - self.active_started_at >= ACTIVE_BREAK_SECONDS
+        ):
+            self.turning = False
+            self.state = "stand"
+            self.state_until = now + 4.5
+            self.active_started_at = now
+            self.view.say("妈妈，起来伸个懒腰吧", 5.0)
+
+    @objc.python_method
+    def _maybe_start_mischief(self, now):
+        if self.mischief_target_x is not None:
+            if now >= self.mischief_until:
+                self.mischief_target_x = None
+                self.next_mischief_at = now + random.uniform(
+                    MISCHIEF_MIN_SECONDS, MISCHIEF_MAX_SECONDS
+                )
+            return
+        if self.force_state or now < self.next_mischief_at or self.dragging:
+            return
+        mouse = NSEvent.mouseLocation()
+        visible = self._visible_frame()
+        # She only chases a cursor already near the desktop floor. No vertical
+        # window jump, and the cursor itself is never moved or clicked.
+        if mouse.y > visible.origin.y + 190:
+            self.next_mischief_at = now + 60
+            return
+        target = mouse.x - WIN_W / 2
+        target = min(
+            max(target, visible.origin.x),
+            visible.origin.x + visible.size.width - WIN_W,
+        )
+        self.mischief_target_x = target
+        self.mischief_until = now + 24
+        self.turning = False
+        self.state = "walk"
+        self.state_until = self.mischief_until
+        self.view.say("嘿嘿，鼠标给我咬一口", 3.5)
 
     @objc.python_method
     def _visible_frame_for_origin(self, x, y):
@@ -440,6 +615,9 @@ class CookieController:
             y = float(data.get("y", y))
             self.facing = int(data.get("facing", self.facing))
             self.draw_facing = self.facing
+            saved_unread = data.get("mail_unread")
+            if isinstance(saved_unread, int) and saved_unread >= 0:
+                self.mail_unread_seen = saved_unread
         except (OSError, ValueError, TypeError):
             pass
         visible = self._visible_frame_for_origin(x, y)
@@ -451,6 +629,8 @@ class CookieController:
     def _save_position(self):
         frame = self.window.frame()
         data = {"x": frame.origin.x, "y": frame.origin.y, "facing": self.facing}
+        if self.mail_unread_seen is not None:
+            data["mail_unread"] = self.mail_unread_seen
         try:
             STATE_FILE.write_text(json.dumps(data))
         except OSError:
@@ -540,6 +720,9 @@ class CookieController:
         dy = current[1] - self.last_mouse_point[1]
         moved = dx * dx + dy * dy >= 4.0
         if moved:
+            idle_gap = now - self.last_mouse_moved_at
+            if idle_gap >= 300:
+                self.active_started_at = now
             self.last_mouse_point = current
             self.last_mouse_moved_at = now
             if self.sleep_due_to_mouse_idle:
@@ -578,6 +761,9 @@ class CookieController:
         self.view.phase = (self.view.phase + dt * phase_speed) % 1.0
         self.view.blink = (self.tick_count % 145) in (0, 1, 2, 3)
         self._track_mouse_activity(now)
+        self._consume_system_events(now)
+        self._maybe_remind_break(now)
+        self._maybe_start_mischief(now)
         self._update_idle_look(now, dt)
 
         if self.turning:
@@ -590,6 +776,25 @@ class CookieController:
             visible = self._visible_frame()
             min_x = visible.origin.x
             max_x = visible.origin.x + visible.size.width - WIN_W
+            if self.mischief_target_x is not None:
+                remaining = self.mischief_target_x - self.walk_x
+                if abs(remaining) <= 5:
+                    self.walk_x = self.mischief_target_x
+                    self.window.setFrameOrigin_(NSPoint(self.walk_x, frame.origin.y))
+                    self.mischief_target_x = None
+                    self.next_mischief_at = now + random.uniform(
+                        MISCHIEF_MIN_SECONDS, MISCHIEF_MAX_SECONDS
+                    )
+                    self.state = "stand"
+                    self.state_until = now + 2.8
+                    self.view.say("（啃啃）抓到你啦", 3.2)
+                    self.view.setNeedsDisplay_(True)
+                    return
+                desired_facing = 1 if remaining > 0 else -1
+                if desired_facing != self.facing:
+                    self._start_turn(desired_facing)
+                    self.view.setNeedsDisplay_(True)
+                    return
             self.walk_x += self.facing * self.speed * dt * FPS
             x = self.walk_x
             if x <= min_x:
