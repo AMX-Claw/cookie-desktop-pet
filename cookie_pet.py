@@ -242,9 +242,13 @@ class CookieView(AppKit.NSView):
         self._end_facing()
 
     @objc.python_method
-    def _draw_state(self, name, rect, facing, turn_scale=1.0):
+    def _draw_state(self, name, rect, facing, turn_scale=1.0, *, angle=0.0):
         self._begin_facing(rect, facing, turn_scale)
-        self._draw_image(self.images[name], rect)
+        pivot = (
+            rect.origin.x + rect.size.width * .5,
+            rect.origin.y + rect.size.height * .92,
+        )
+        self._draw_image(self.images[name], rect, angle=angle, pivot=pivot)
         self._end_facing()
 
     @objc.python_method
@@ -273,10 +277,10 @@ class CookieView(AppKit.NSView):
             )
 
     @objc.python_method
-    def _draw_mail_envelope(self, facing):
-        x = 48 if facing == -1 else 34
+    def _draw_mail_envelope(self, facing, x_offset=0.0, y_offset=0.0):
+        x = (48 if facing == -1 else 34) + x_offset
         NSString.stringWithString_("✉︎").drawAtPoint_withAttributes_(
-            NSPoint(x, 64),
+            NSPoint(x, 64 + y_offset),
             {
                 NSFontAttributeName: NSFont.boldSystemFontOfSize_(12),
                 NSForegroundColorAttributeName: rgba("#c84d43", .95),
@@ -313,6 +317,7 @@ class CookieView(AppKit.NSView):
         bob = 0.0
         squash = 1.0
         turn_scale = 1.0
+        stand_sway = 0.0
         if c.state == "walk":
             bob = -.7 * abs(math.sin(self.phase * math.tau))
         elif c.state == "idle":
@@ -321,6 +326,14 @@ class CookieView(AppKit.NSView):
             squash = 1.0 + .024 * math.sin(self.phase * math.tau)
         elif c.state == "down":
             squash = 1.0 + .010 * math.sin(self.phase * math.tau)
+        elif c.state == "stand":
+            # A little tiptoe stretch plus a side-to-side balance. The pivot
+            # stays near the hind paws, so she looks alive rather than rotated
+            # like a floating sticker.
+            pulse = .5 - .5 * math.cos(self.phase * math.tau)
+            squash = 1.0 + .058 * pulse
+            bob = -2.7 * pulse
+            stand_sway = 4.2 * math.sin(self.phase * math.tau)
 
         if c.turning:
             p = c.turn_phase
@@ -337,7 +350,7 @@ class CookieView(AppKit.NSView):
             self._draw_state("sleep.png", rect, facing)
             self._draw_sleep_zs(facing)
         elif c.state == "stand":
-            self._draw_state("stand.png", rect, facing)
+            self._draw_state("stand.png", rect, facing, angle=stand_sway)
         else:
             self._draw_rig(
                 rect,
@@ -347,7 +360,11 @@ class CookieView(AppKit.NSView):
                 head_angle=c.look_angle,
             )
         if time.time() < c.mail_alert_until:
-            self._draw_mail_envelope(facing)
+            self._draw_mail_envelope(
+                facing,
+                x_offset=stand_sway * .35,
+                y_offset=bob,
+            )
         self._draw_bubble()
 
 
@@ -757,7 +774,12 @@ class CookieController:
         dt = min(.08, max(0.0, now - self.last_tick))
         self.last_tick = now
         self.tick_count += 1
-        phase_speed = 1.05 if self.state == "walk" else (.22 if self.state == "sleep" else .30)
+        phase_speed = (
+            1.05 if self.state == "walk"
+            else .50 if self.state == "stand"
+            else .22 if self.state == "sleep"
+            else .30
+        )
         self.view.phase = (self.view.phase + dt * phase_speed) % 1.0
         self.view.blink = (self.tick_count % 145) in (0, 1, 2, 3)
         self._track_mouse_activity(now)
