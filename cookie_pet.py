@@ -365,6 +365,11 @@ class CookieController:
         self.sleep_due_to_mouse_idle = False
 
         self._restore_position()
+        # NSWindow origins are effectively snapped to backing pixels. At the
+        # slow gait, each 24 fps tick travels < 1 px; reading the snapped frame
+        # back on every tick would discard that fraction forever and make the
+        # dog walk in place. Keep a separate sub-pixel accumulator.
+        self.walk_x = float(self.window.frame().origin.x)
         self.window.makeKeyAndOrderFront_(None)
         self.view.say("妈妈，我来桌面上散步啦 🐕", 4.5)
 
@@ -505,6 +510,7 @@ class CookieController:
         x = min(max(frame.origin.x, visible.origin.x), visible.origin.x + visible.size.width - WIN_W)
         y = min(max(frame.origin.y, visible.origin.y), visible.origin.y + visible.size.height - WIN_H)
         self.window.setFrameOrigin_(NSPoint(x, y))
+        self.walk_x = float(x)
         self._save_position()
 
     @objc.python_method
@@ -565,12 +571,15 @@ class CookieController:
             visible = self._visible_frame()
             min_x = visible.origin.x
             max_x = visible.origin.x + visible.size.width - WIN_W
-            x = frame.origin.x + self.facing * self.speed * dt * FPS
+            self.walk_x += self.facing * self.speed * dt * FPS
+            x = self.walk_x
             if x <= min_x:
                 x = min_x
+                self.walk_x = x
                 self._start_turn(1)
             elif x >= max_x:
                 x = max_x
+                self.walk_x = x
                 self._start_turn(-1)
             self.window.setFrameOrigin_(NSPoint(x, frame.origin.y))
 
