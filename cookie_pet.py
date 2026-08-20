@@ -239,15 +239,22 @@ class CookieView(AppKit.NSView):
         self._end_facing()
 
     @objc.python_method
-    def _draw_sleep_zs(self):
+    def _draw_sleep_zs(self, facing):
         """Three staggered Zs that rise, grow, and fade in a soft loop."""
         clock = time.time() * .38
+        # The sleep artwork's head sits just right of centre in its natural
+        # left-facing pose. Mirror the emitter with the dog, so the Zs always
+        # begin above her head instead of at the window's top-left corner.
+        head_x = 52.0 if facing == -1 else 40.0
+        drift = 1.0 if facing == -1 else -1.0
         for index in range(3):
             progress = (clock + index / 3.0) % 1.0
             alpha = math.sin(progress * math.pi) ** 1.35 * .82
             size = 6.5 + progress * 4.5
-            x = 5.0 + progress * 8.0 + math.sin(progress * math.tau) * 1.2
-            y = 37.0 - progress * 25.0
+            x = head_x + drift * (
+                progress * 9.0 + math.sin(progress * math.tau) * 1.2
+            )
+            y = 64.0 - progress * 29.0
             NSString.stringWithString_("Z").drawAtPoint_withAttributes_(
                 NSPoint(x, y),
                 {
@@ -308,7 +315,7 @@ class CookieView(AppKit.NSView):
             self._draw_state("down.png", rect, facing)
         elif c.state == "sleep":
             self._draw_state("sleep.png", rect, facing)
-            self._draw_sleep_zs()
+            self._draw_sleep_zs(facing)
         elif c.state == "stand":
             self._draw_state("stand.png", rect, facing)
         else:
