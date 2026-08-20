@@ -239,6 +239,24 @@ class CookieView(AppKit.NSView):
         self._end_facing()
 
     @objc.python_method
+    def _draw_sleep_zs(self):
+        """Three staggered Zs that rise, grow, and fade in a soft loop."""
+        clock = time.time() * .38
+        for index in range(3):
+            progress = (clock + index / 3.0) % 1.0
+            alpha = math.sin(progress * math.pi) ** 1.35 * .82
+            size = 6.5 + progress * 4.5
+            x = 5.0 + progress * 8.0 + math.sin(progress * math.tau) * 1.2
+            y = 37.0 - progress * 25.0
+            NSString.stringWithString_("Z").drawAtPoint_withAttributes_(
+                NSPoint(x, y),
+                {
+                    NSFontAttributeName: NSFont.boldSystemFontOfSize_(size),
+                    NSForegroundColorAttributeName: rgba("#7460a8", alpha),
+                },
+            )
+
+    @objc.python_method
     def _draw_bubble(self):
         if not self.message or time.time() >= self.message_until:
             return
@@ -290,13 +308,7 @@ class CookieView(AppKit.NSView):
             self._draw_state("down.png", rect, facing)
         elif c.state == "sleep":
             self._draw_state("sleep.png", rect, facing)
-            NSString.stringWithString_("Z  z").drawAtPoint_withAttributes_(
-                NSPoint(8, 23),
-                {
-                    NSFontAttributeName: NSFont.systemFontOfSize_(10),
-                    NSForegroundColorAttributeName: rgba("#7460a8", .78),
-                },
-            )
+            self._draw_sleep_zs()
         elif c.state == "stand":
             self._draw_state("stand.png", rect, facing)
         else:
